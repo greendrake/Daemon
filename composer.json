@@ -1,0 +1,23 @@
+{
+    "name": "drakees/daemon",
+    "type": "library",
+    "description": "A PHP trait for adding daemon functionality to classes",
+    "keywords": ["daemon"],
+    "license": "BSD-3-Clause",
+    "authors": [
+        {
+            "name": "Eugene Greendrake",
+            "email": "eugene@drakees.com",
+            "role": "Lead"
+        }
+    ],
+    "require": {
+        "php": ">=5.4.0"
+    },
+    "minimum-stability": "dev",
+    "autoload": {
+        "psr-4": {
+            "DrakeES\\Daemon\\": ["src/"]
+        }
+    }
+}
