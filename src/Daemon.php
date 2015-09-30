@@ -5,17 +5,29 @@ namespace DrakeES\Daemon;
 trait Daemon {
 
     private $pidFilePath = null;
-    private $keepGoing;
+    
+    private $keepGoing = true;
+
+    protected $oneCycleOnly = false;
+
     private $tickPeriod = null;
     private $isBackground = false;
     private $childSignalHandlerBound = false;
 
-    private $hasWaitedForPid = false;
+    private $hasWaitedForPidFile = false;
+
+    // Where the daemon is started by calling start(), in most cases,
+    // we do not need the daemon to proceed executing whatever logic is underneath that start() call.
+    // Sometimes it may be needed, though.
+    protected function shouldExitOnceDone()
+    {
+        return true;
+    }
 
     public function start()
     {
-        if ($pid = $this->getPid(true)) {
-            return;
+        if ($pid = $this->getPid()) {
+            return $pid;
         }
         if (!$this->childSignalHandlerBound) {
             // This is required for the signal handler to execute
@@ -29,31 +41,33 @@ trait Daemon {
         if ($pid == -1) {
             throw new \Exception("Couldn not fork");
         } else if ($pid) {
-            
+            $this->writePid($pid);
+            $this->onAfterFork();
+            return $pid;
         } else {
             posix_setsid();
             $this->isBackground = true;
+            $this->onAfterFork();
             $pid = null;
-            $this->keepGoing = true;
             pcntl_signal(SIGTERM, array($this, 'sigHandler'));
+            $e = false;
             while ($this->keepGoing) {
+                $e = false;
                 $cycleStart = microtime(true);
-                $current_pid = getmypid(); // PID can change while running!
-                if ($current_pid !== $pid) {
-                    $pid = $current_pid;
-                    if (!$this->writePid($pid)) {
-                        throw new \Exception("Can't write to {$this->pidFile}");
-                    }
+                $currentPid = getmypid(); // PID can change while running!
+                if ($currentPid !== $pid) {
+                    $this->writePid($currentPid);
                 }
-                $payload = false;
                 try {
-                    $payload = $this->payload();
+                    $this->payload();
                 } catch (\Exception $e) {
-                    $this->log((string)$e);
                     if ($this->getConfigValue('stop-on-error', true)) {
                         $this->keepGoing = false;
                         break;
                     }
+                }
+                if ($this->oneCycleOnly) {
+                    break;
                 }
                 // Sleep the rest of tick time if left any
                 $tickTimeLeft = $this->getTickPeriod() - 1000000 * (microtime(true) - $cycleStart);
@@ -62,10 +76,15 @@ trait Daemon {
                 }
             }
             $this->onBeforeStop();
-            $this->removePidFile();
+            $this->cleanup();
+            if ($e) {
+                throw $e;
+            }
             // Avoid executing whatever logic was following start() where it was called
             // because this process exists solely for executing the daemon logic.
-            exit;
+            if ($this->shouldExitOnceDone()) {
+                exit;
+            }
         }
     }
 
@@ -86,34 +105,35 @@ trait Daemon {
         $this->start();
     }
     
-    private function removePidFile()
+    private function getPidFilePath()
+    {
+        if ($this->pidFilePath === null) {
+            $this->pidFilePath = $this->getConfigValue('pid-file', tempnam(sys_get_temp_dir(), 'drakees-daemon-pid-' . str_replace('\\', '_', get_class($this)) . '-' . date('Y-m-d-H-i-s')));
+        }
+        return $this->pidFilePath;
+    }
+
+    protected function cleanup()
     {
         return unlink($this->getPidFilePath());
     }
     
-    private function writePid($pid)
+    private function hasPidBeenWrittenInFile()
     {
-        $file = $this->getPidFilePath();
-        $dir = dirname($file);
-        if (!is_dir($dir)) {
-            \Xcms\File::mkdir($dir, true);
-        }
-        return file_put_contents($file, $pid);
+        return file_exists($file = $this->getPidFilePath()) && file_get_contents($file) !== '';
     }
 
-    private function hasPidBeenWritten()
+    protected function writePid($pid)
     {
-        $file = $this->getPidFilePath();
-        if (!file_exists($file)) {
+        return file_put_contents($this->getPidFilePath(), $pid);
+    }
+
+    protected function retrievePid()
+    {
+        if ($this->pidFilePath === null) {
             return;
         }
-        return file_get_contents($file) !== '';
-    }
-    
-    // Returns PID if daemon is running, or FALSE otherwise
-    public function getPid($doNotWait = false)
-    {
-        if (!($exists = $this->hasPidBeenWritten()) && !$doNotWait && !$this->isBackground() && !$this->hasWaitedForPid) {
+        if (!($exists = $this->hasPidBeenWrittenInFile()) && !$this->isBackground() && !$this->hasWaitedForPidFile) {
             // If we are in the outer process and this is the first time we're asking for the PID,
             // it may have not been created yet. Allow some time before jumping to conclusions:
             $attempts = 0;
@@ -121,24 +141,19 @@ trait Daemon {
                 usleep(1000);
                 $attempts++;
             } while (
-                        !($exists = $this->hasPidBeenWritten())
+                        !($exists = $this->hasPidBeenWrittenInFile())
                             &&
-                        $attempts < 200
+                        $attempts < 50
                     );
-            $this->hasWaitedForPid = true;
+            $this->hasWaitedForPidFile = true;
         }
-        if (!$exists) {
-            return false;
-        }
-        $pid = file_get_contents($this->getPidFilePath());
-        if (posix_kill($pid, 0)) {
-            return $pid;
-        } else {
-            if (!$this->removePidFile()) {
-                throw new \Exception("Daemon is not running and I can't remove its pidfile {$file}");
-            }
-            return false;
-        }
+        return $exists ? (int)(file_get_contents($this->getPidFilePath())) : null;
+    }
+    
+    // Returns PID if daemon is running, or FALSE otherwise
+    public function getPid()
+    {
+        return ($pid = $this->retrievePid()) && posix_kill($pid, 0) ? $pid : false;
     }
 
     public function isRunning()
@@ -146,7 +161,12 @@ trait Daemon {
         return $this->getPid() !== false;
     }
 
-    private function childSignalHandler($signo, $pid = null, $status = null)
+    public function hasFinished()
+    {
+        return $this->retrievePid() && !$this->isRunning();
+    }
+
+    public function childSignalHandler($signo, $pid = null, $status = null)
     {
         pcntl_waitpid($pid ? $pid : -1, $status, WNOHANG);
     }
@@ -156,7 +176,7 @@ trait Daemon {
         return $this->isBackground;
     }
         
-    private function sigHandler($signo)
+    public function sigHandler($signo)
     {
         switch($signo) {
             case SIGTERM:
@@ -166,14 +186,6 @@ trait Daemon {
             
             break;
         }
-    }
-    
-    private function getPidFilePath()
-    {
-        if ($this->pidFilePath === null) {
-            $this->pidFilePath = $this->getConfigValue('pid-file', tempnam(sys_get_temp_dir(), 'drakees-daemon-pid-' . str_replace('\\', '_', get_class($this)) . '-' . date('Y-m-d-H-i-s')));
-        }
-        return $this->pidFilePath;
     }
     
     protected function getTickPeriod()
@@ -204,6 +216,12 @@ trait Daemon {
             usleep($sleep);
         }
         return true;
+    }
+
+    // Some logic might be needed here e.g. resetting PDO connections
+    protected function onAfterFork()
+    {
+
     }
 
     // The methods below are to be implemented in the holder class where required
