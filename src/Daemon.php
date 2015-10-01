@@ -41,8 +41,8 @@ trait Daemon {
         if ($pid == -1) {
             throw new \Exception("Couldn not fork");
         } else if ($pid) {
-            $this->writePid($pid);
             $this->onAfterFork();
+            $this->writePid($pid);
             return $pid;
         } else {
             posix_setsid();
@@ -55,8 +55,9 @@ trait Daemon {
                 $e = false;
                 $cycleStart = microtime(true);
                 $currentPid = getmypid(); // PID can change while running!
-                if ($currentPid !== $pid) {
+                if ($currentPid != $pid) {
                     $this->writePid($currentPid);
+                    $pid = $currentPid;
                 }
                 try {
                     $this->payload();
