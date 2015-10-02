@@ -54,11 +54,6 @@ trait Daemon {
             while ($this->keepGoing) {
                 $e = false;
                 $cycleStart = microtime(true);
-                $currentPid = getmypid(); // PID can change while running!
-                if ($currentPid != $pid) {
-                    $this->writePid($currentPid);
-                    $pid = $currentPid;
-                }
                 try {
                     $this->payload();
                 } catch (\Exception $e) {
