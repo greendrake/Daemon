@@ -51,6 +51,8 @@ trait Daemon {
             $pid = null;
             pcntl_signal(SIGTERM, array($this, 'sigHandler'));
             $e = false;
+            $M = 1000000;
+            $mul = $M / $this->getTickPeriodMultiplier();
             while ($this->keepGoing) {
                 $e = false;
                 $cycleStart = microtime(true);
@@ -65,8 +67,9 @@ trait Daemon {
                 if ($this->oneCycleOnly) {
                     break;
                 }
-                // Sleep the rest of tick time if left any
-                $tickTimeLeft = $this->getTickPeriod() - 1000000 * (microtime(true) - $cycleStart);
+                // Sleep the rest of tick time if left any.
+                // Need to yeild microseconds in here at all times:
+                $tickTimeLeft = $mul * ($this->getTickPeriod() - $M * (microtime(true) - $cycleStart));
                 if ($tickTimeLeft > 0) {
                     usleep($tickTimeLeft);
                 }
@@ -82,6 +85,11 @@ trait Daemon {
                 exit;
             }
         }
+    }
+
+    protected function getTickPeriodMultiplier()
+    {
+        return 1000000; // By default, tick period is configured in microseconds. Override this if needed, e.g. return "1" if you need seconds instead.
     }
 
     public function stop()
@@ -187,7 +195,7 @@ trait Daemon {
     protected function getTickPeriod()
     {
         if ($this->tickPeriod === null) {
-            $this->tickPeriod = (int)($this->getConfigValue('tick-period', 1000000)); // microseconds
+            $this->tickPeriod = (int)($this->getConfigValue('tick-period', $this->getTickPeriodMultiplier()));
         }
         return $this->tickPeriod;
     }
