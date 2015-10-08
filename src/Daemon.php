@@ -69,7 +69,7 @@ trait Daemon {
                 }
                 // Sleep the rest of tick time if left any.
                 // Need to yeild microseconds in here at all times:
-                $tickTimeLeft = $mul * ($this->getTickPeriod() - $M * (microtime(true) - $cycleStart));
+                $tickTimeLeft = $mul * $this->getTickPeriod() - $M * (microtime(true) - $cycleStart);
                 if ($tickTimeLeft > 0) {
                     usleep($tickTimeLeft);
                 }
