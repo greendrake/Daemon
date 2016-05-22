@@ -34,7 +34,7 @@ trait Daemon {
             declare(ticks=1);
             // When child process exist, it sends the parent process SIGCHLD signal
             // Handling it properly is required to avoid the exited children becoming zombies
-            pcntl_signal(SIGCHLD, array($this, 'childSignalHandler'));
+            pcntl_signal(SIGCHLD, SIG_IGN);
             $this->childSignalHandlerBound = true;
         }
         $pid = pcntl_fork();
@@ -168,11 +168,6 @@ trait Daemon {
     public function hasFinished()
     {
         return $this->retrievePid() && !$this->isRunning();
-    }
-
-    public function childSignalHandler($signo, $pid = null, $status = null)
-    {
-        pcntl_waitpid($pid ? $pid : -1, $status, WNOHANG);
     }
 
     protected function isBackground()
